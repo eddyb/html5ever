@@ -14,11 +14,11 @@ use std::path;
 use serialize::json;
 use serialize::json::Json;
 use serialize::Decodable;
-use std::collections::hashmap::HashMap;
+use std::collections::HashMap;
 
 use syntax::codemap::Span;
-use syntax::ast::{Path, ExprLit, LitStr, TokenTree, TTTok};
-use syntax::parse::token::LIT_STR;
+use syntax::ast::{Path, ExprLit, LitStr, TokenTree, TtToken};
+use syntax::parse::token;
 use syntax::ext::base::{ExtCtxt, MacResult, MacExpr};
 use syntax::ext::source_util::expand_file;
 
@@ -77,7 +77,7 @@ pub fn expand(cx: &mut ExtCtxt, sp: Span, tt: &[TokenTree]) -> Box<MacResult+'st
     // Argument to the macro should be a single literal string: a path to
     // entities.json, relative to the file containing the macro invocation.
     let json_filename = match tt {
-        [TTTok(_, LIT_STR(s))] => s.as_str().to_string(),
+        [TtToken(_, token::LitStr(s))] => s.as_str().to_string(),
         _ => bail!(cx, sp, usage),
     };
 
@@ -110,12 +110,11 @@ pub fn expand(cx: &mut ExtCtxt, sp: Span, tt: &[TokenTree]) -> Box<MacResult+'st
     // Emit a macro invocation of the form
     //
     //     phf_map!(k => v, k => v, ...)
-    let mut tts: Vec<TokenTree> = vec!();
+    let mut toks: Vec<TokenTree> = vec!();
     for (k, c) in map.into_iter() {
         let k = k.as_slice();
-        let c0 = c[0];
-        let c1 = c[1];
-        tts.extend(quote_tokens!(&mut *cx, $k => [$c0, $c1],).into_iter());
+        let [c0, c1] = c;
+        toks.extend(quote_tokens!(&mut *cx, $k => [$c0, $c1],).into_iter());
     }
-    MacExpr::new(quote_expr!(&mut *cx, phf_map!($tts)))
+    MacExpr::new(quote_expr!(&mut *cx, phf_map!($toks)))
 }

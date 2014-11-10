@@ -31,7 +31,6 @@ use core::mem::replace;
 use core::iter::{Rev, Enumerate};
 use core::slice;
 use core::fmt::Show;
-use collections::MutableSeq;
 use collections::vec::Vec;
 use collections::string::String;
 use collections::str::Slice;
@@ -428,7 +427,7 @@ impl<Handle: Clone, Sink: TreeSink<Handle>>
                     Some(_) => return AfterHead,
                 },
 
-                atom!(template) => fail!("FIXME: <template> not implemented"),
+                atom!(template) => panic!("FIXME: <template> not implemented"),
 
                 _ => (),
             }

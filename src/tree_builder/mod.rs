@@ -30,7 +30,7 @@ use core::mem::replace;
 use collections::vec::Vec;
 use collections::string::String;
 use collections::str::Slice;
-use collections::{MutableSeq, Deque, RingBuf};
+use collections::RingBuf;
 
 mod interface;
 mod tag_sets;
@@ -60,7 +60,7 @@ pub struct TreeBuilderOpts {
 
     /// The `<svg>`, `<math>`, and `<template>` tags have special
     /// parsing rules that are currently unimplemented.  By default
-    /// we `fail!()` if any of these tags is encountered.  If this
+    /// we `panic!()` if any of these tags is encountered.  If this
     /// option is enabled, we will instead attempt to parse them
     /// using the ordinary HTML parsing rules.
     ///
@@ -209,7 +209,7 @@ impl<Handle: Clone, Sink: TreeSink<Handle>> TreeBuilder<Handle, Sink> {
             let QualName { ns, local } = self.sink.elem_name(node.clone());
             match ns {
                 ns!(HTML) => print!(" {}", local),
-                _ => fail!(),
+                _ => panic!(),
             }
         }
         println!("");
@@ -222,7 +222,7 @@ impl<Handle: Clone, Sink: TreeSink<Handle>> TreeBuilder<Handle, Sink> {
     #[cfg(not(for_c))]
     fn debug_step(&self, mode: InsertionMode, token: &Token) {
         use util::str::to_escaped_string;
-        h5e_debug!("processing {} in insertion mode {:?}", to_escaped_string(token), mode);
+        h5e_debug!("processing {} in insertion mode {}", to_escaped_string(token), mode);
     }
 
     fn process_to_completion(&mut self, mut token: Token) {
@@ -261,7 +261,7 @@ impl<Handle: Clone, Sink: TreeSink<Handle>> TreeBuilder<Handle, Sink> {
                         String::from_str(buf.slice_to(len)));
 
                     if len < buf.len() {
-                        more_tokens.push(
+                        more_tokens.push_back(
                             CharacterTokens(NotSplit, String::from_str(buf.slice_from(len))));
                     }
                 }
@@ -305,7 +305,7 @@ impl<Handle: Clone, Sink: TreeSink<Handle>> TokenSink for TreeBuilder<Handle, Si
                 self.sink.parse_error(format_if!(
                     self.opts.exact_errors,
                     "DOCTYPE in body",
-                    "DOCTYPE in insertion mode {:?}", self.mode));
+                    "DOCTYPE in insertion mode {}", self.mode));
                 return;
             },
 

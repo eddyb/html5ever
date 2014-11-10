@@ -26,17 +26,18 @@ use self::char_ref::{CharRef, CharRefTokenizer};
 
 use self::buffer_queue::{BufferQueue, SetResult, FromSet, NotFromSet};
 
-use util::str::{lower_ascii, lower_ascii_letter, empty_str, AsciiExt};
+use util::str::{lower_ascii, lower_ascii_letter, empty_str};
 use util::smallcharset::SmallCharSet;
 
 use core::mem::replace;
 use core::default::Default;
 use alloc::boxed::Box;
-use collections::{MutableSeq, MutableMap};
 use collections::vec::Vec;
+#[cfg(not(for_c))]
+use collections::slice::SliceAllocPrelude;
 use collections::string::String;
 use collections::str::{MaybeOwned, Slice};
-use collections::treemap::TreeMap;
+use collections::TreeMap;
 
 use string_cache::{Atom, QualName};
 
@@ -110,10 +111,6 @@ pub struct Tokenizer<Sink> {
     /// Input ready to be tokenized.
     input_buffers: BufferQueue,
 
-    /// If Some(n), the abstract machine needs n available
-    /// characters to continue.
-    wait_for: Option<uint>,
-
     /// Are we at the end of the file, once buffers have been processed
     /// completely? This affects whether we will wait for lookahead or not.
     at_eof: bool,
@@ -177,7 +174,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
     /// Create a new tokenizer which feeds tokens to a particular `TokenSink`.
     pub fn new(sink: Sink, mut opts: TokenizerOpts) -> Tokenizer<Sink> {
         if opts.profile && cfg!(for_c) {
-            fail!("Can't profile tokenizer when built as a C library");
+            panic!("Can't profile tokenizer when built as a C library");
         }
 
         let start_tag_name = opts.last_start_tag_name.take()
@@ -188,7 +185,6 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
             opts: opts,
             sink: sink,
             state: state,
-            wait_for: None,
             char_ref_tokenizer: None,
             input_buffers: BufferQueue::new(),
             at_eof: false,
@@ -272,11 +268,11 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
         } {
             // format_if!(true) will still use the static error when built for C.
             let msg = format_if!(true, "Bad character",
-                "Bad character {:?}", c);
+                "Bad character {}", c);
             self.emit_error(msg);
         }
 
-        h5e_debug!("got character {:?}", c);
+        h5e_debug!("got character {}", c);
         self.current_char = c;
         Some(c)
     }
@@ -314,36 +310,15 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
         }
     }
 
-    // If fewer than n characters are available, return None.
-    // Otherwise check if they satisfy a predicate, and consume iff so.
+    // Check if the next characters are an ASCII case-insensitive match.  See
+    // BufferQueue::eat.
     //
-    // FIXME: we shouldn't need to consume and then put back
-    //
-    // FIXME: do input stream preprocessing.  It's probably okay not to,
-    // because none of the strings we look ahead for contain characters
-    // affected by it, but think about this more.
-    fn lookahead_and_consume(&mut self, n: uint, p: |&str| -> bool) -> Option<bool> {
-        match self.input_buffers.pop_front(n) {
-            None if self.at_eof => {
-                h5e_debug!("lookahead: requested {:u} characters not available and never will be", n);
-                Some(false)
-            }
-            None => {
-                h5e_debug!("lookahead: requested {:u} characters not available", n);
-                self.wait_for = Some(n);
-                None
-            }
-            Some(s) => {
-                if p(s.as_slice()) {
-                    h5e_debug!("lookahead: condition satisfied by {:?}", s);
-                    // FIXME: set current input character?
-                    Some(true)
-                } else {
-                    h5e_debug!("lookahead: condition not satisfied by {:?}", s);
-                    self.unconsume(s);
-                    Some(false)
-                }
-            }
+    // NB: this doesn't do input stream preprocessing or set the current input
+    // character.
+    fn eat(&mut self, pat: &str) -> Option<bool> {
+        match self.input_buffers.eat(pat) {
+            None if self.at_eof => Some(false),
+            r => r,
         }
     }
 
@@ -355,7 +330,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
                 let old_sink = self.time_in_sink;
                 let (run, mut dt) = time!(self.step());
                 dt -= (self.time_in_sink - old_sink);
-                let new = match self.state_profile.find_mut(&state) {
+                let new = match self.state_profile.get_mut(&state) {
                     Some(x) => {
                         *x += dt;
                         false
@@ -378,7 +353,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
         let msg = format_if!(
             self.opts.exact_errors,
             "Bad character",
-            "Saw {:?} in state {:?}", self.current_char, self.state);
+            "Saw {} in state {}", self.current_char, self.state);
         self.emit_error(msg);
     }
 
@@ -386,7 +361,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
         let msg = format_if!(
             self.opts.exact_errors,
             "Unexpected EOF",
-            "Saw EOF in state {:?}", self.state);
+            "Saw EOF in state {}", self.state);
         self.emit_error(msg);
     }
 
@@ -655,15 +630,8 @@ macro_rules! pop_except_from ( ($me:expr, $set:expr) => (
     unwrap_or_return!($me.pop_except_from($set), false)
 ))
 
-// NB: if you use this after get_char!(self) then the first char is still
-// consumed no matter what!
-macro_rules! lookahead_and_consume ( ($me:expr, $n:expr, $pred:expr) => (
-    match $me.lookahead_and_consume($n, $pred) {
-        // This counts as progress because we set the
-        // wait_for variable.
-        None => return true,
-        Some(r) => r
-    }
+macro_rules! eat ( ($me:expr, $pat:expr) => (
+    unwrap_or_return!($me.eat($pat), false)
 ))
 
 impl<Sink: TokenSink> Tokenizer<Sink> {
@@ -675,19 +643,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
             return self.step_char_ref_tokenizer();
         }
 
-        match self.wait_for {
-            Some(n) if !self.input_buffers.has(n) => {
-                h5e_debug!("lookahead: requested {:u} characters still not available", n);
-                return false;
-            }
-            Some(_n) => {
-                h5e_debug!("lookahead: requested {:u} characters become available", _n);
-                self.wait_for = None;
-            }
-            None => (),
-        }
-
-        h5e_debug!("processing in state {:?}", self.state);
+        h5e_debug!("processing in state {}", self.state);
         match self.state {
             //§ data-state
             states::Data => loop {
@@ -1106,9 +1062,9 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
             //§ after-doctype-name-state
             states::AfterDoctypeName => loop {
-                if lookahead_and_consume!(self, 6, |s| s.eq_ignore_ascii_case("public")) {
+                if eat!(self, "public") {
                     go!(self: to AfterDoctypeKeyword Public);
-                } else if lookahead_and_consume!(self, 6, |s| s.eq_ignore_ascii_case("system")) {
+                } else if eat!(self, "system") {
                     go!(self: to AfterDoctypeKeyword System);
                 } else {
                     match get_char!(self) {
@@ -1195,9 +1151,9 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
             //§ markup-declaration-open-state
             states::MarkupDeclarationOpen => loop {
-                if lookahead_and_consume!(self, 2, |s| s == "--") {
+                if eat!(self, "--") {
                     go!(self: clear_comment; to CommentStart);
-                } else if lookahead_and_consume!(self, 7, |s| s.eq_ignore_ascii_case("doctype")) {
+                } else if eat!(self, "doctype") {
                     go!(self: to Doctype);
                 } else {
                     // FIXME: CDATA, requires "adjusted current node" from tree builder
@@ -1208,7 +1164,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
             //§ cdata-section-state
             states::CdataSection
-                => fail!("FIXME: state {:?} not implemented", self.state),
+                => panic!("FIXME: state {} not implemented", self.state),
             //§ END
         }
     }
@@ -1250,7 +1206,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
                 states::AttributeValue(_)
                     => go!(self: push_value c),
 
-                _ => fail!("state {:?} should not be reachable in process_char_ref", self.state),
+                _ => panic!("state {} should not be reachable in process_char_ref", self.state),
             }
         }
     }
@@ -1269,7 +1225,6 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
         // Process all remaining buffered input.
         // If we're waiting for lookahead, we're not gonna get it.
-        self.wait_for = None;
         self.at_eof = true;
         self.run();
 
@@ -1293,7 +1248,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
         let mut results: Vec<(states::State, u64)>
             = self.state_profile.iter().map(|(s, t)| (*s, *t)).collect();
-        results.sort_by(|&(_, x), &(_, y)| y.cmp(&x));
+        results.as_mut_slice().sort_by(|&(_, x), &(_, y)| y.cmp(&x));
 
         let total = results.iter().map(|&(_, t)| t).sum();
         println!("\nTokenizer profile, in nanoseconds");
@@ -1302,12 +1257,12 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
 
         for (k, v) in results.into_iter() {
             let pct = 100.0 * (v as f64) / (total as f64);
-            println!("{:12u}  {:4.1f}%  {:?}", v, pct, k);
+            println!("{:12u}  {:4.1f}%  {}", v, pct, k);
         }
     }
 
     fn eof_step(&mut self) -> bool {
-        h5e_debug!("processing EOF in state {:?}", self.state);
+        h5e_debug!("processing EOF in state {}", self.state);
         match self.state {
             states::Data | states::RawData(Rcdata) | states::RawData(Rawtext)
             | states::RawData(ScriptData) | states::Plaintext
@@ -1372,7 +1327,7 @@ impl<Sink: TokenSink> Tokenizer<Sink> {
                 => go!(self: error; to BogusComment),
 
             states::CdataSection
-                => fail!("FIXME: state {:?} not implemented in EOF", self.state),
+                => panic!("FIXME: state {} not implemented in EOF", self.state),
         }
     }
 }
@@ -1383,7 +1338,7 @@ mod test {
     use core::prelude::*;
     use collections::vec::Vec;
     use collections::string::String;
-    use collections::slice::CloneableVector;
+    use collections::slice::CloneSliceAllocPrelude;
     use super::{option_push, append_strings}; // private items
 
     #[test]

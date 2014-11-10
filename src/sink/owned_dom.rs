@@ -28,13 +28,12 @@ use tree_builder;
 use serialize::{Serializable, Serializer};
 use driver::ParseResult;
 
-use core::ty::Unsafe;
+use core::cell::UnsafeCell;
 use core::default::Default;
 use core::mem::transmute;
 use core::kinds::marker;
 use core::mem;
 use alloc::boxed::Box;
-use collections::{MutableSeq, Set, MutableSet};
 use collections::vec::Vec;
 use collections::string::String;
 use collections::str::MaybeOwned;
@@ -61,13 +60,13 @@ impl SquishyNode {
 }
 
 struct Handle {
-    ptr: *const Unsafe<SquishyNode>,
+    ptr: *const UnsafeCell<SquishyNode>,
     no_send: marker::NoSend,
     no_sync: marker::NoSync,
 }
 
 impl Handle {
-    fn new(ptr: *const Unsafe<SquishyNode>) -> Handle {
+    fn new(ptr: *const UnsafeCell<SquishyNode>) -> Handle {
         Handle {
             ptr: ptr,
             no_send: marker::NoSend,
@@ -125,7 +124,7 @@ fn append(mut new_parent: Handle, mut child: Handle) {
     *parent = new_parent
 }
 
-fn get_parent_and_index(mut child: Handle) -> Option<(Handle, uint)> {
+fn get_parent_and_index(child: Handle) -> Option<(Handle, uint)> {
     if child.parent.is_null() {
         return None;
     }
@@ -133,7 +132,7 @@ fn get_parent_and_index(mut child: Handle) -> Option<(Handle, uint)> {
     let to_find = child;
     match child.parent.children.iter().enumerate().find(|&(_, n)| *n == to_find) {
         Some((i, _)) => Some((child.parent, i)),
-        None => fail!("have parent but couldn't find in parent's children!"),
+        None => panic!("have parent but couldn't find in parent's children!"),
     }
 }
 
@@ -148,7 +147,7 @@ fn append_to_existing_text(mut prev: Handle, text: &str) -> bool {
 }
 
 pub struct Sink {
-    nodes: Vec<Box<Unsafe<SquishyNode>>>,
+    nodes: Vec<Box<UnsafeCell<SquishyNode>>>,
     document: Handle,
     errors: Vec<MaybeOwned<'static>>,
     quirks_mode: QuirksMode,
@@ -169,9 +168,17 @@ impl Default for Sink {
 
 impl Sink {
     fn new_node(&mut self, node: NodeEnum) -> Handle {
-        self.nodes.push(box Unsafe::new(SquishyNode::new(node)));
-        let ptr: *const Unsafe<SquishyNode> = &**self.nodes.last().unwrap();
+        self.nodes.push(box UnsafeCell::new(SquishyNode::new(node)));
+        let ptr: *const UnsafeCell<SquishyNode> = &**self.nodes.last().unwrap();
         Handle::new(ptr)
+    }
+
+    // FIXME(rust-lang/rust#18296): This is separate from remove_from_parent so
+    // we can call it.
+    fn unparent(&mut self, mut target: Handle) {
+        let (mut parent, i) = unwrap_or_return!(get_parent_and_index(target), ());
+        parent.children.remove(i).expect("not found!");
+        target.parent = Handle::null();
     }
 }
 
@@ -195,7 +202,7 @@ impl TreeSink<Handle> for Sink {
     fn elem_name(&self, target: Handle) -> QualName {
         match target.node {
             Element(ref name, _) => name.clone(),
-            _ => fail!("not an element!"),
+            _ => panic!("not an element!"),
         }
     }
 
@@ -207,7 +214,7 @@ impl TreeSink<Handle> for Sink {
         self.new_node(Comment(text))
     }
 
-    fn append(&mut self, mut parent: Handle, child: NodeOrText<Handle>) {
+    fn append(&mut self, parent: Handle, child: NodeOrText<Handle>) {
         // Append to an existing Text node if we have one.
         match child {
             AppendText(ref text) => match parent.children.last() {
@@ -249,7 +256,7 @@ impl TreeSink<Handle> for Sink {
         };
 
         if !child.parent.is_null() {
-            self.remove_from_parent(child);
+            self.unparent(child);
         }
 
         child.parent = parent;
@@ -273,10 +280,8 @@ impl TreeSink<Handle> for Sink {
         existing.extend(attrs.into_iter());
     }
 
-    fn remove_from_parent(&mut self, mut target: Handle) {
-        let (mut parent, i) = unwrap_or_return!(get_parent_and_index(target), ());
-        parent.children.remove(i).expect("not found!");
-        target.parent = Handle::null();
+    fn remove_from_parent(&mut self, target: Handle) {
+        self.unparent(target);
     }
 
     fn mark_script_already_started(&mut self, _node: Handle) { }
@@ -311,7 +316,7 @@ impl ParseResult<Sink> for OwnedDom {
         // their parent.  In the process of iterating we drop all nodes that
         // aren't in the tree.
         for node in sink.nodes.into_iter() {
-            let ptr: *const Unsafe<SquishyNode> = &*node;
+            let ptr: *const UnsafeCell<SquishyNode> = &*node;
             if live.contains(&(ptr as uint)) {
                 unsafe {
                     mem::forget(node);
@@ -323,7 +328,7 @@ impl ParseResult<Sink> for OwnedDom {
 
         // Transmute the root to a Node, finalizing the transfer of ownership.
         let document = unsafe {
-            mem::transmute::<*const Unsafe<SquishyNode>, Box<Node>>(sink.document.ptr)
+            mem::transmute::<*const UnsafeCell<SquishyNode>, Box<Node>>(sink.document.ptr)
         };
 
         // FIXME: do this assertion statically
@@ -373,7 +378,7 @@ impl Serializable for Node {
             (true, &Text(ref text)) => serializer.write_text(text.as_slice()),
             (true, &Comment(ref text)) => serializer.write_comment(text.as_slice()),
 
-            (true, &Document) => fail!("Can't serialize Document node itself"),
+            (true, &Document) => panic!("Can't serialize Document node itself"),
         }
     }
 }

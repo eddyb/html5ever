@@ -7,7 +7,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate debug;
 extern crate string_cache;
 
 extern crate html5ever;
@@ -15,7 +14,7 @@ extern crate html5ever;
 use std::io;
 use std::default::Default;
 use std::string::String;
-use std::collections::hashmap::HashMap;
+use std::collections::HashMap;
 use std::str::MaybeOwned;
 use string_cache::QualName;
 
@@ -46,7 +45,7 @@ impl TreeSink<uint> for Sink {
     }
 
     fn elem_name(&self, target: uint) -> QualName {
-        self.names.find(&target).expect("not an element").clone()
+        self.names.get(&target).expect("not an element").clone()
     }
 
     fn create_element(&mut self, name: QualName, _attrs: Vec<Attribute>) -> uint {

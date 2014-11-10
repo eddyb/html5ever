@@ -34,6 +34,7 @@ pub enum Status {
     Done,
 }
 
+#[deriving(Show)]
 enum State {
     Begin,
     Octothorpe,
@@ -115,7 +116,7 @@ impl<Sink: TokenSink> CharRefTokenizer {
             return Done;
         }
 
-        h5e_debug!("char ref tokenizer stepping in state {:?}", self.state);
+        h5e_debug!("char ref tokenizer stepping in state {}", self.state);
         match self.state {
             Begin => self.do_begin(tokenizer),
             Octothorpe => self.do_octothorpe(tokenizer),
@@ -245,7 +246,7 @@ impl<Sink: TokenSink> CharRefTokenizer {
     fn do_named(&mut self, tokenizer: &mut Tokenizer<Sink>) -> Status {
         let c = unwrap_or_return!(tokenizer.get_char(), Stuck);
         self.name_buf_mut().push(c);
-        match data::NAMED_ENTITIES.find_equiv(&self.name_buf().as_slice()) {
+        match data::NAMED_ENTITIES.find_equiv(self.name_buf().as_slice()) {
             // We have either a full match or a prefix of one.
             Some(m) => {
                 if m[0] != 0 {

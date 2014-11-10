@@ -12,7 +12,7 @@
 
 #![feature(macro_rules, phase, globs)]
 #![deny(warnings)]
-#![allow(unnecessary_parens)]
+#![allow(unused_parens)]
 
 // Don't implicitly pull in things from std::*
 // This helps us make a C-friendly library.
@@ -36,9 +36,6 @@ extern crate collections;
 #[cfg(not(for_c))]
 #[phase(plugin, link)]
 extern crate log;
-
-#[phase(plugin, link)]
-extern crate debug;
 
 #[phase(plugin)]
 extern crate phf_mac;

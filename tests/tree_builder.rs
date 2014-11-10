@@ -13,7 +13,7 @@ use std::io;
 use std::mem::replace;
 use std::default::Default;
 use std::path::Path;
-use std::collections::hashmap::HashMap;
+use std::collections::{HashSet, HashMap};
 use std::vec::MoveItems;
 use test::{TestDesc, TestDescAndFn, DynTestName, DynTestFn};
 
@@ -30,7 +30,7 @@ fn parse_tests<It: Iterator<String>>(mut lines: It) -> Vec<HashMap<String, Strin
     macro_rules! finish_val ( () => (
         match key.take() {
             None => (),
-            Some(key) => assert!(test.insert(key, replace(&mut val, String::new()))),
+            Some(key) => assert!(test.insert(key, replace(&mut val, String::new())).is_none()),
         }
     ))
 
@@ -69,7 +69,7 @@ fn serialize(buf: &mut String, indent: uint, handle: Handle) {
 
     let node = handle.borrow();
     match node.node {
-        Document => fail!("should not reach Document"),
+        Document => panic!("should not reach Document"),
 
         Doctype(ref name, ref public, ref system) => {
             buf.push_str("<!DOCTYPE ");
@@ -93,7 +93,7 @@ fn serialize(buf: &mut String, indent: uint, handle: Handle) {
         }
 
         Element(ref name, ref attrs) => {
-            assert!(name.ns == ns!(""));
+            assert!(name.ns == ns!(HTML));
             buf.push_str("<");
             buf.push_str(name.local.as_slice());
             buf.push_str(">\n");
@@ -123,26 +123,31 @@ static IGNORE_SUBSTRS: &'static [&'static str]
 
 fn make_test(
         tests: &mut Vec<TestDescAndFn>,
+        ignores: &HashSet<String>,
         path_str: &str,
         idx: uint,
         fields: HashMap<String, String>) {
 
     let get_field = |key| {
-        let field = fields.find_equiv(&key).expect("missing field");
+        let field = fields.find_equiv(key).expect("missing field");
         field.as_slice().trim_right_chars('\n').to_string()
     };
 
-    if fields.find_equiv(&"document-fragment").is_some() {
+    if fields.find_equiv("document-fragment").is_some() {
         // FIXME
         return;
     }
 
     let data = get_field("data");
     let expected = get_field("document");
+    let name = format!("tb: {}-{}", path_str, idx);
+    let ignore = ignores.contains(&name)
+        || IGNORE_SUBSTRS.iter().any(|&ig| data.as_slice().contains(ig));
+
     tests.push(TestDescAndFn {
         desc: TestDesc {
-            name: DynTestName(format!("tb: {}-{}", path_str, idx)),
-            ignore: IGNORE_SUBSTRS.iter().any(|&ig| data.as_slice().contains(ig)),
+            name: DynTestName(name),
+            ignore: ignore,
             should_fail: false,
         },
         testfn: DynTestFn(proc() {
@@ -156,14 +161,14 @@ fn make_test(
             result.truncate(len - 1);  // drop the trailing newline
 
             if result != expected {
-                fail!("\ninput: {}\ngot:\n{}\nexpected:\n{}\n",
+                panic!("\ninput: {}\ngot:\n{}\nexpected:\n{}\n",
                     data, result, expected);
             }
         }),
     });
 }
 
-pub fn tests(src_dir: Path) -> MoveItems<TestDescAndFn> {
+pub fn tests(src_dir: Path, ignores: &HashSet<String>) -> MoveItems<TestDescAndFn> {
     let mut tests = vec!();
 
     foreach_html5lib_test(src_dir, "tree-construction", ".dat", |path_str, file| {
@@ -173,7 +178,7 @@ pub fn tests(src_dir: Path) -> MoveItems<TestDescAndFn> {
         let data = parse_tests(lines);
 
         for (i, test) in data.into_iter().enumerate() {
-            make_test(&mut tests, path_str, i, test);
+            make_test(&mut tests, ignores, path_str, i, test);
         }
     });
 
