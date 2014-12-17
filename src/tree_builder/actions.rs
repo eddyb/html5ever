@@ -427,7 +427,14 @@ impl<Handle: Clone, Sink: TreeSink<Handle>>
                     Some(_) => return AfterHead,
                 },
 
-                atom!(template) => panic!("FIXME: <template> not implemented"),
+                atom!(template) => {
+                    if self.opts.ignore_missing_rules {
+                        self.sink.parse_error(Slice("Ignoring unimplemented insertion \
+                                                     mode for <template>"));
+                    } else {
+                        panic!("FIXME: <template> not implemented");
+                    }
+                }
 
                 _ => (),
             }
