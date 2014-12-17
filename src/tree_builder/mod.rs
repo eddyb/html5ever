@@ -150,14 +150,14 @@ impl<Handle: Clone, Sink: TreeSink<Handle>> TreeBuilder<Handle, Sink> {
         let doc_handle = sink.get_document();
         TreeBuilder {
             opts: opts,
-            sink: sink,
-            mode: Initial,
+            mode: if opts.fragment { InBody } else { Initial },
             orig_mode: None,
             template_modes: vec!(),
             pending_table_text: vec!(),
             quirks_mode: NoQuirks,
             doc_handle: doc_handle,
-            open_elems: vec!(),
+            open_elems: if opts.fragment { vec![sink.get_document()] } else { vec![] },
+            sink: sink,
             active_formatting: vec!(),
             head_elem: None,
             form_elem: None,
